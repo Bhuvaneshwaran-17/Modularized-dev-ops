@@ -1,0 +1,51 @@
+name: "Java - Build Artifact"
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        required: true
+        type: string
+      java_version:
+        type: string
+        default: "21"
+      pom_path:
+        type: string
+        default: "pom.xml"
+      build_command:
+        type: string
+        default: "mvn -B clean package -DskipTests"
+      artifact_path:
+        type: string
+        default: "target/*.jar"
+    outputs:
+      artifact_name:
+        value: ${{ jobs.build.outputs.artifact_name }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+          cache: maven
+
+      - name: Build
+        run: ${{ inputs.build_command }} -f ${{ inputs.pom_path }}
+
+      - name: Set Artifact Name
+        id: meta
+        run: echo "artifact_name=${{ inputs.project_name }}-jar" >> $GITHUB_OUTPUT
+
+      - name: Upload JAR Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: ${{ inputs.artifact_path }}
+          if-no-files-found: error

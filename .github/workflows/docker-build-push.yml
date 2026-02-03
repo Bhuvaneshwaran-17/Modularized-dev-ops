@@ -1,0 +1,61 @@
+name: "Docker - Build (and optional Push)"
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        required: true
+        type: string
+      artifact_name:
+        required: true
+        type: string
+      image_name:
+        required: true
+        type: string
+      push:
+        type: boolean
+        default: false
+      dockerfile:
+        type: string
+        default: "Dockerfile"
+      context:
+        type: string
+        default: "."
+    secrets:
+      REGISTRY_USERNAME:
+        required: false
+      REGISTRY_PASSWORD:
+        required: false
+      REGISTRY_URL:
+        required: false
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ./artifact
+
+      # Your Dockerfile should COPY from ./artifact
+      # e.g. COPY artifact/*.jar /app.jar
+
+      - name: Login (optional)
+        if: ${{ inputs.push }}
+        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login ${{ secrets.REGISTRY_URL }} -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -f ${{ inputs.dockerfile }} \
+            -t ${{ inputs.image_name }}:${{ github.sha }} \
+            ${{ inputs.context }}
+
+      - name: Push Docker Image
+        if: ${{ inputs.push }}
+        run: |
+          docker push ${{ inputs.image_name }}:${{ github.sha }}

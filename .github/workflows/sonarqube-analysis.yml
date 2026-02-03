@@ -1,0 +1,65 @@
+name: "SonarQube Analysis"
+
+on:
+  workflow_call:
+    inputs:
+      java_version:
+        type: string
+        default: "21"
+      pom_path:
+        type: string
+        default: "pom.xml"
+      sonar_project_key:
+        required: true
+        type: string
+      sonar_org:
+        required: false
+        type: string
+      run_quality_gate:
+        type: boolean
+        default: true
+    secrets:
+      SONAR_TOKEN:
+        required: true
+      SONAR_HOST_URL:
+        required: true
+
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+          cache: maven
+
+      # Run tests + coverage so Sonar has data.
+      # If you already ran tests elsewhere, you can skip this and instead download artifacts.
+      - name: Run Tests with Coverage
+        run: mvn -B test jacoco:report -f ${{ inputs.pom_path }}
+
+      - name: SonarQube Scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          mvn -B sonar:sonar -f ${{ inputs.pom_path }} \
+            -Dsonar.host.url=$SONAR_HOST_URL \
+            -Dsonar.login=$SONAR_TOKEN \
+            -Dsonar.projectKey=${{ inputs.sonar_project_key }} \
+            -Dsonar.qualitygate.wait=${{ inputs.run_quality_gate }}
+
+      # Optional: store reports for visibility
+      - name: Upload Test & Coverage Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonar-test-coverage-reports
+          path: |
+            **/target/site/jacoco/**
+            **/target/surefire-reports/**
+          if-no-files-found: warn
+``
