@@ -28,6 +28,14 @@ jobs:
       - name: Run Tests
         run: ${{ inputs.test_command }} -f ${{ inputs.pom_path }}
 
+      - name: Debug - find test report folders
+        if: always()
+        run: |
+          echo "Searching for surefire/failsafe directories..."
+          find . -type d -name "surefire-reports" -o -name "failsafe-reports" || true
+          echo "Searching for Maven target directories..."
+          find . -type d -name "target" | head -n 50 || true
+
       - name: Upload Test Reports
         if: always()
         uses: actions/upload-artifact@v4
