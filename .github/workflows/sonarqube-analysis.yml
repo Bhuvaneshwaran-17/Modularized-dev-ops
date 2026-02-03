@@ -62,4 +62,3 @@ jobs:
             **/target/site/jacoco/**
             **/target/surefire-reports/**
           if-no-files-found: warn
-``
