@@ -7,13 +7,13 @@ on:
         required: true
         type: string
 
-      # Make artifact optional (because your Dockerfile builds jar itself)
+      # Optional: only needed if your Dockerfile copies from ./artifact
       artifact_name:
         required: false
         type: string
         default: ""
 
-      # Image repo name WITHOUT registry host is preferred, e.g. "myregistry/transitcard"
+      # Image repo name WITHOUT registry host, e.g. "myregistry/transitcard"
       image_name:
         required: true
         type: string
@@ -40,11 +40,11 @@ on:
 
     secrets:
       REGISTRY_USERNAME:
-        required: false
+        required: true
       REGISTRY_PASSWORD:
-        required: false
+        required: true
       REGISTRY_URL:
-        required: false
+        required: true
 
 jobs:
   docker:
@@ -56,7 +56,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Optional: only download artifact if provided
       - name: Download Build Artifact (optional)
         if: ${{ inputs.artifact_name != '' }}
         uses: actions/download-artifact@v4
@@ -84,10 +83,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Compose full image reference using registry URL
-          # Example: REGISTRY_URL=registry.company.com, image_name=myregistry/transitcard
           FULL_IMAGE="${{ secrets.REGISTRY_URL }}/${{ inputs.image_name }}"
-
           SHA_TAG="${FULL_IMAGE}:${GITHUB_SHA}"
 
           echo "full_image=$FULL_IMAGE" >> "$GITHUB_OUTPUT"
@@ -113,6 +109,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Summary
+        shell: bash
         run: |
           echo "✅ Project      : ${{ inputs.project_name }}"
           echo "✅ Context      : ${{ inputs.context }}"
