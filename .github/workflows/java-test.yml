@@ -40,15 +40,15 @@ jobs:
           name: ${{ inputs.reports_artifact_name }}
           path: "**/target/surefire-reports/**"
 
-  # Move the notification here
   notify-failure:
     needs: test
     if: failure()
     uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
     with:
       project_name: "Java Unit Tests"
-      component_name: "Test Execution" # Or a static string
-      job_name: "Test Execution"
+      # FIXED: Now using the dynamic input passed from the orchestrator
+      component_name: "${{ inputs.reports_artifact_name }}"
+      job_name: "Unit Test Execution"
       status: "FAILURE"
     secrets:
       WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
