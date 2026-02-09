@@ -53,6 +53,18 @@ jobs:
           tags: |
             ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:latest
             ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:${{ github.sha }}
+  
+  notify-success:
+    needs: docker
+    if: success() # Runs only when the build/push is successful
+    uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
+    with:
+      project_name: "Docker Build"
+      component_name: "${{ inputs.image_name }}"
+      job_name: "Containerization"
+      status: "SUCCESS"
+    secrets:
+      WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
 
   notify-failure:
     needs: docker
