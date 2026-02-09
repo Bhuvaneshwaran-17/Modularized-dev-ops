@@ -6,44 +6,37 @@ on:
       project_name:
         required: true
         type: string
-
-      # Optional: only needed if your Dockerfile copies from ./artifact
       artifact_name:
         required: false
         type: string
         default: ""
-
-      # Image repo name WITHOUT registry host, e.g. "myregistry/transitcard"
       image_name:
         required: true
         type: string
-
       push:
         type: boolean
         default: false
-
       dockerfile:
         type: string
         default: "Dockerfile"
-
       context:
         type: string
         default: "."
-
       platforms:
         type: string
         default: "linux/amd64"
-
       tag_latest:
         type: boolean
         default: true
-
     secrets:
       REGISTRY_USERNAME:
         required: true
       REGISTRY_PASSWORD:
         required: true
       REGISTRY_URL:
+        required: true
+      # NEW SECRET FOR NOTIFICATION
+      TEAMS_WEBHOOK_URL:
         required: true
 
 jobs:
@@ -82,13 +75,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           FULL_IMAGE="${{ secrets.REGISTRY_URL }}/${{ inputs.image_name }}"
           SHA_TAG="${FULL_IMAGE}:${GITHUB_SHA}"
-
           echo "full_image=$FULL_IMAGE" >> "$GITHUB_OUTPUT"
           echo "sha_tag=$SHA_TAG" >> "$GITHUB_OUTPUT"
-
           if [[ "${{ inputs.tag_latest }}" == "true" && "${GITHUB_REF}" == "refs/heads/main" ]]; then
             echo "latest_tag=${FULL_IMAGE}:latest" >> "$GITHUB_OUTPUT"
           else
@@ -109,13 +99,20 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Summary
+        if: success()
         shell: bash
         run: |
-          echo "✅ Project      : ${{ inputs.project_name }}"
-          echo "✅ Context      : ${{ inputs.context }}"
-          echo "✅ Dockerfile   : ${{ inputs.dockerfile }}"
           echo "✅ Image (full) : ${{ steps.meta.outputs.full_image }}"
           echo "✅ Tag (SHA)    : ${{ steps.meta.outputs.sha_tag }}"
-          if [ -n "${{ steps.meta.outputs.latest_tag }}" ]; then
-            echo "✅ Tag (latest) : ${{ steps.meta.outputs.latest_tag }}"
-          fi
+
+      # THE CRITICAL NOTIFICATION STEP
+      - name: Notify Teams on Failure
+        if: failure()
+        uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
+        with:
+          project_name: "Docker Build/Push Failure"
+          component_name: "${{ inputs.image_name }}"
+          job_name: "Containerization"
+          status: "FAILURE"
+        secrets:
+          WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}

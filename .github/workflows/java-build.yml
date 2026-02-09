@@ -21,6 +21,10 @@ on:
     outputs:
       artifact_name:
         value: ${{ jobs.build.outputs.artifact_name }}
+    secrets:
+      # REQUIRED FOR TEAMS NOTIFICATION
+      TEAMS_WEBHOOK_URL:
+        required: true
 
 jobs:
   build:
@@ -49,3 +53,15 @@ jobs:
           name: ${{ steps.meta.outputs.artifact_name }}
           path: ${{ inputs.artifact_path }}
           if-no-files-found: error
+
+      # THE CRITICAL NOTIFICATION STEP
+      - name: Notify Teams on Failure
+        if: failure()
+        uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
+        with:
+          project_name: "Java Build Failure"
+          component_name: "${{ inputs.project_name }}"
+          job_name: "Maven Packaging"
+          status: "FAILURE"
+        secrets:
+          WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}

@@ -9,28 +9,20 @@ on:
       pom_path:
         type: string
         default: "pom.xml"
-
-      # SonarCloud project key (required)
       sonar_project_key:
         required: true
         type: string
-
-      # Wait for Quality Gate result (optional)
       run_quality_gate:
         type: boolean
         default: true
-
     secrets:
-      # Required SonarCloud token
       SONAR_TOKEN:
         required: true
-
-      # Should be https://sonarcloud.io
       SONAR_HOST_URL:
         required: true
-
-      # Your SonarCloud Organization Key (the one you just found)
       SONAR_ORG_KEY:
+        required: true
+      TEAMS_WEBHOOK_URL: # ADD THIS SECRET INPUT
         required: true
 
 jobs:
@@ -71,8 +63,21 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sonar-test-coverage-reports
+          # Use the project key to keep artifacts unique in monorepo
+          name: reports-${{ inputs.sonar_project_key }} 
           path: |
             **/target/site/jacoco/**
             **/target/surefire-reports/**
           if-no-files-found: warn
+
+      # THE CRITICAL NOTIFICATION STEP
+      - name: Notify Teams on Failure
+        if: failure()
+        uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
+        with:
+          project_name: "SonarCloud Analysis"
+          component_name: "${{ inputs.sonar_project_key }}"
+          job_name: "Quality Gate & Scan"
+          status: "FAILURE"
+        secrets:
+          WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
