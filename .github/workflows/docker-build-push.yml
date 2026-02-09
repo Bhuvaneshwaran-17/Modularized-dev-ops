@@ -32,8 +32,10 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Login
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Login to Registry
         if: inputs.push
         uses: docker/login-action@v3
         with:
@@ -49,13 +51,15 @@ jobs:
           push: ${{ inputs.push }}
           tags: ${{ secrets.REGISTRY_URL }}/${{ inputs.image_name }}:latest
 
-      - name: Notify Teams on Failure
-        if: failure()
-        uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
-        with:
-          project_name: "Docker Failure"
-          component_name: "${{ inputs.image_name }}"
-          job_name: "Containerization"
-          status: "FAILURE"
-        secrets:
-          WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+  # Moved the reusable workflow call to its own job
+  notify-failure:
+    needs: docker
+    if: failure()
+    uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
+    with:
+      project_name: "Docker Failure"
+      component_name: "${{ inputs.image_name }}"
+      job_name: "Containerization"
+      status: "FAILURE"
+    secrets:
+      WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}

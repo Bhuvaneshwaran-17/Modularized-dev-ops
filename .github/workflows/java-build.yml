@@ -23,8 +23,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ inputs.java_version }}
@@ -33,13 +36,15 @@ jobs:
       - name: Build
         run: ${{ inputs.build_command }} -f ${{ inputs.pom_path }}
 
-      - name: Notify Teams on Failure
-        if: failure()
-        uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
-        with:
-          project_name: "Java Build Failure"
-          component_name: "${{ inputs.project_name }}"
-          job_name: "Maven Packaging"
-          status: "FAILURE"
-        secrets:
-          WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+  # Separated the notification into its own job
+  notify-failure:
+    needs: build
+    if: failure()
+    uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
+    with:
+      project_name: "Java Build Failure"
+      component_name: "${{ inputs.project_name }}"
+      job_name: "Maven Packaging"
+      status: "FAILURE"
+    secrets:
+      WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
