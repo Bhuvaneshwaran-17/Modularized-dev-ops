@@ -24,7 +24,7 @@ on:
       REGISTRY_PASSWORD:
         required: true
       REGISTRY_URL:
-        required: true
+        required: false # Changed to false to support Docker Hub defaults
       TEAMS_WEBHOOK_URL:
         required: true
 
@@ -49,9 +49,11 @@ jobs:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
           push: ${{ inputs.push }}
-          tags: ${{ secrets.REGISTRY_URL }}/${{ inputs.image_name }}:latest
+          # This logic prevents the leading slash if REGISTRY_URL is empty
+          tags: |
+            ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:latest
+            ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:${{ github.sha }}
 
-  # Moved the reusable workflow call to its own job
   notify-failure:
     needs: docker
     if: failure()
