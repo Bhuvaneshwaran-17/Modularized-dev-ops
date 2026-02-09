@@ -16,7 +16,6 @@ on:
         type: string
         default: "test-reports"
     secrets:
-      # REQUIRED FOR TEAMS NOTIFICATION
       TEAMS_WEBHOOK_URL:
         required: true
 
@@ -25,7 +24,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -35,31 +33,20 @@ jobs:
       - name: Run Tests
         run: ${{ inputs.test_command }} -f ${{ inputs.pom_path }}
 
-      - name: Debug - find test report folders
-        if: always()
-        run: |
-          echo "Searching for surefire/failsafe directories..."
-          find . -type d \( -name "surefire-reports" -o -name "failsafe-reports" \) || true
-
       - name: Upload Test Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.reports_artifact_name }}
-          path: |
-            **/target/surefire-reports/**
-            **/target/failsafe-reports/**
-          if-no-files-found: warn
+          path: "**/target/surefire-reports/**"
 
-      # THE CRITICAL NOTIFICATION STEP
       - name: Notify Teams on Failure
         if: failure()
         uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
         with:
           project_name: "Java Unit Tests"
-          # We use reports_artifact_name or pom_path to identify the service
           component_name: "${{ inputs.reports_artifact_name }}"
-          job_name: "Maven Test Execution"
+          job_name: "Test Execution"
           status: "FAILURE"
         secrets:
           WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
