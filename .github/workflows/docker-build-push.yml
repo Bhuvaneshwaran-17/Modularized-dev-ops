@@ -24,39 +24,85 @@ on:
       REGISTRY_PASSWORD:
         required: true
       REGISTRY_URL:
-        required: false # Changed to false to support Docker Hub defaults
+        required: false  # if empty, defaults to Docker Hub
       TEAMS_WEBHOOK_URL:
         required: true
 
 jobs:
   docker:
     runs-on: ubuntu-latest
+    # Needed so we can upload SARIF to "Code scanning alerts"
+    permissions:
+      contents: read
+      security-events: write
+
+    env:
+      # Prefix only when REGISTRY_URL is provided
+      REG_PREFIX: ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}
+      IMG_LATEST: ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:latest
+      IMG_SHA:    ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:${{ github.sha }}
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Login to Registry
-        if: inputs.push
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.REGISTRY_URL }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-
-      - name: Build and Push
+      # -------------------- BUILD (no push) --------------------
+      # Load the image into the local Docker daemon so Trivy can scan it
+      - name: Build image (load into Docker daemon)
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
-          file: ${{ inputs.dockerfile }}
-          push: ${{ inputs.push }}
-          # This logic prevents the leading slash if REGISTRY_URL is empty
+          file:    ${{ inputs.dockerfile }}
+          push:    false
+          load:    true
           tags: |
-            ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:latest
-            ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:${{ github.sha }}
-  
+            ${{ env.IMG_LATEST }}
+            ${{ env.IMG_SHA }}
+
+      # -------------------- SECOPS GATE (Trivy) --------------------
+      - name: Run Trivy vulnerability scanner (fail on HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref:      ${{ env.IMG_SHA }}
+          format:         'sarif'
+          output:         'trivy.sarif'
+          exit-code:      '1'                   # block the pipeline on findings
+          ignore-unfixed: true                  # typical default in CI
+          vuln-type:      'os,library'
+          severity:       'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to Code Scanning (SARIF)
+        if: always()                            # upload even on failure for triage
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+      # -------------------- end SECOPS GATE --------------------
+
+      # -------------------- LOGIN & PUSH (only if requested) --------------------
+      - name: Login to Container Registry
+        if: inputs.push
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY_URL || 'docker.io' }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      # Re-build to push (re-uses cache); alternatively you could `docker push` if you prefer
+      - name: Push image (tags: latest and sha)
+        if: inputs.push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file:    ${{ inputs.dockerfile }}
+          push:    true
+          tags: |
+            ${{ env.IMG_LATEST }}
+            ${{ env.IMG_SHA }}
+      # -------------------- end LOGIN & PUSH --------------------
+
   notify-success:
     needs: docker
-    if: success() # Runs only when the build/push is successful
+    if: success()
     uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
     with:
       project_name: "Docker Build"
