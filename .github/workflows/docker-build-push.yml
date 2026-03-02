@@ -89,7 +89,7 @@ jobs:
 
       # Re-build to push (re-uses cache); alternatively you could `docker push` if you prefer
       - name: Push image (tags: latest and sha)
-        if: {{ inputs.push }}
+        if: ${{ inputs.push }}
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
