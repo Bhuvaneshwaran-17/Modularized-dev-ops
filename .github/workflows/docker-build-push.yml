@@ -24,20 +24,18 @@ on:
       REGISTRY_PASSWORD:
         required: true
       REGISTRY_URL:
-        required: false  # if empty, defaults to Docker Hub
+        required: false
       TEAMS_WEBHOOK_URL:
         required: true
 
 jobs:
   docker:
     runs-on: ubuntu-latest
-    # Needed so we can upload SARIF to "Code scanning alerts"
     permissions:
       contents: read
-      security-events: write
+      security-events: write  # Critical for SARIF upload
 
     env:
-      # Prefix only when REGISTRY_URL is provided
       REG_PREFIX: ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}
       IMG_LATEST: ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:latest
       IMG_SHA:    ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:${{ github.sha }}
@@ -46,50 +44,53 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # -------------------- BUILD (no push) --------------------
-      # Load the image into the local Docker daemon so Trivy can scan it
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # -------------------- BUILD (Local Load) --------------------
       - name: Build image (load into Docker daemon)
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
           file:    ${{ inputs.dockerfile }}
           push:    false
-          load:    true
+          load:    true  # Exports image to the local Docker engine for Trivy
           tags: |
             ${{ env.IMG_LATEST }}
             ${{ env.IMG_SHA }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # -------------------- SECOPS GATE (Trivy) --------------------
-      - name: Run Trivy vulnerability scanner (fail on HIGH/CRITICAL)
+      - name: Run Trivy vulnerability scanner
+        id: trivy_scan
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref:      ${{ env.IMG_SHA }}
-          format:         'sarif'
-          output:         'trivy.sarif'
-          exit-code:      '1'                   # block the pipeline on findings
-          ignore-unfixed: true                  # typical default in CI
-          vuln-type:      'os,library'
-          severity:       'CRITICAL,HIGH'
+          image-ref: ${{ env.IMG_SHA }}
+          format: 'sarif'
+          output: 'trivy.sarif'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
 
-      - name: Upload Trivy results to Code Scanning (SARIF)
-        if: always()                            # upload even on failure for triage
-        uses: github/codeql-action/upload-sarif@v4
+      - name: Upload Trivy results to Code Scanning
+        if: always() # Ensure report is uploaded even if vulnerabilities are found
+        uses: github/codeql-action/upload-sarif@v4 # Updated to v4
         with:
-          sarif_file: trivy.sarif
-      # -------------------- end SECOPS GATE --------------------
+          sarif_file: 'trivy.sarif'
 
-      # -------------------- LOGIN & PUSH (only if requested) --------------------
+      # -------------------- LOGIN & PUSH --------------------
       - name: Login to Container Registry
-        if: ${{ inputs.push }}
+        if: ${{ inputs.push && success() }}
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.REGISTRY_URL || 'docker.io' }}
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      # Re-build to push (re-uses cache); alternatively you could `docker push` if you prefer
-      - name: "Push image (tags: latest and sha) "
-        if: ${{ inputs.push }}
+      - name: "Push image (tags: latest and sha)"
+        if: ${{ inputs.push && success() }}
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
@@ -98,28 +99,4 @@ jobs:
           tags: |
             ${{ env.IMG_LATEST }}
             ${{ env.IMG_SHA }}
-      # -------------------- end LOGIN & PUSH --------------------
-
-  notify-success:
-    needs: docker
-    if: success()
-    uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
-    with:
-      project_name: "Docker Build"
-      component_name: "${{ inputs.image_name }}"
-      job_name: "Containerization"
-      status: "SUCCESS"
-    secrets:
-      WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
-
-  notify-failure:
-    needs: docker
-    if: failure()
-    uses: Bhuvaneshwaran-17/central-devops-tooling/.github/workflows/teams-notifier.yml@main
-    with:
-      project_name: "Docker Failure"
-      component_name: "${{ inputs.image_name }}"
-      job_name: "Containerization"
-      status: "FAILURE"
-    secrets:
-      WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          cache-from: type=gha # Uses cache from the previous build step
