@@ -61,7 +61,7 @@ jobs:
 
       # -------------------- SECOPS GATE (Trivy) --------------------
       - name: Run Trivy vulnerability scanner (fail on HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.34.1
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref:      ${{ env.IMG_SHA }}
           format:         'sarif'
@@ -73,7 +73,7 @@ jobs:
 
       - name: Upload Trivy results to Code Scanning (SARIF)
         if: always()                            # upload even on failure for triage
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
       # -------------------- end SECOPS GATE --------------------
