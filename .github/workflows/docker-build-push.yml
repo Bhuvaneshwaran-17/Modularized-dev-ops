@@ -49,7 +49,7 @@ jobs:
           driver: docker
           buildkitd-config: |
             [feature]
-              containerdSnapshotter = true
+            containerdSnapshotter = true
 
       - name: Build image (load into Docker daemon)
         uses: docker/build-push-action@v6
