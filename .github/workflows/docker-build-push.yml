@@ -34,6 +34,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      pull-requests: write # Required if you want Scout to write comments
 
     env:
       IMG_SHA: ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:${{ github.sha }}
@@ -76,6 +77,7 @@ jobs:
           ignore-base: true
           exit-code: true
           sarif-file: scout-report.sarif
+          write-comment: true
 
       - name: Upload Scan results
         if: always()
