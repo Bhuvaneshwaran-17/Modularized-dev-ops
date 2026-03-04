@@ -34,7 +34,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
-      pull-requests: write # Required if you want Scout to write comments
+      pull-requests: write
 
     env:
       IMG_SHA: ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:${{ github.sha }}
@@ -70,14 +70,11 @@ jobs:
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Docker Scout Scan
-        uses: docker/scout-action@v1
-        with:
-          command: cve
-          image: ${{ env.IMG_SHA }}
-          ignore-base: true
-          exit-code: true
-          sarif-file: scout-report.sarif
-          write-comment: true
+        run: |
+          # Install Docker Scout CLI explicitly to ensure it works
+          curl -sSfL https://raw.githubusercontent.com/docker/scout-cli/main/install.sh | sh -s -- -b /usr/local/bin
+          # Run the scan and output to SARIF
+          docker scout cve ${{ env.IMG_SHA }} --format sarif --output scout-report.sarif --exit-code
 
       - name: Upload Scan results
         if: always()
