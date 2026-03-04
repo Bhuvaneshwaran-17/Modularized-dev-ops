@@ -43,9 +43,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
+
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker
+          buildkitd-config: |
+            [feature]
+              containerdSnapshotter = true
 
       - name: Build image (load into Docker daemon)
         uses: docker/build-push-action@v6
