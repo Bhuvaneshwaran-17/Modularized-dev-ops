@@ -24,22 +24,19 @@ on:
       REGISTRY_PASSWORD:
         required: true
       REGISTRY_URL:
-        required: false  # if empty, defaults to Docker Hub
+        required: false
       TEAMS_WEBHOOK_URL:
         required: true
 
 jobs:
   docker:
     runs-on: ubuntu-latest
-    # Required permissions for GitHub Security Tab integration
     permissions:
       contents: read
       security-events: write
 
     env:
-      REG_PREFIX: ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}
-      IMG_LATEST: ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:latest
-      IMG_SHA:    ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:${{ github.sha }}
+      IMG_SHA: ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:${{ github.sha }}
 
     steps:
       - name: Checkout Code
@@ -47,63 +44,48 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
-      # -------------------- BUILD (Local Load) --------------------
-      # We build first and use 'load: true' to put it in the local Docker daemon.
-      # This is why Trivy will be able to find the image.
       - name: Build image (load into Docker daemon)
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
-          file:    ${{ inputs.dockerfile }}
-          push:    false
-          load:    true
-          tags: |
-            ${{ env.IMG_LATEST }}
-            ${{ env.IMG_SHA }}
+          file: ${{ inputs.dockerfile }}
+          push: false
+          load: true
+          tags: ${{ env.IMG_SHA }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # -------------------- SECOPS GATE (Trivy) --------------------
-      - name: Run the Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@v0.29.0
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ env.IMG_SHA }}
           format: 'sarif'
           output: 'trivy.sarif'
-          exit-code: '1' # This will fail the step if vulnerabilities are found
+          exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
-      - name: Upload Trivy results to Code Scanning (SARIF)
-        if: always() # IMPORTANT: Still upload the report if vulnerabilities are found
+      - name: Upload Trivy results
+        if: always()
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: 'trivy.sarif'
-      # -------------------- end SECOPS GATE --------------------
 
-      # -------------------- LOGIN & PUSH --------------------
       - name: Login to Container Registry
-        if: ${{ inputs.push }}
+        if: ${{ inputs.push && success() }}
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.REGISTRY_URL || 'docker.io' }}
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: "Push image (tags: latest and sha)"
-        if: ${{ inputs.push }}
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ inputs.context }}
-          file:    ${{ inputs.dockerfile }}
-          push:    true
-          tags: |
-            ${{ env.IMG_LATEST }}
-            ${{ env.IMG_SHA }}
-          cache-from: type=gha
-      # -------------------- end LOGIN & PUSH --------------------
+      - name: Push image
+        if: ${{ inputs.push && success() }}
+        run: docker push ${{ env.IMG_SHA }}
 
   notify-success:
     needs: docker
