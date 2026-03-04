@@ -70,12 +70,13 @@ jobs:
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Docker Scout Scan
-        run: |
-          # Install Docker Scout CLI explicitly
-          curl -sSfL https://raw.githubusercontent.com/docker/scout-cli/main/install.sh | sh -s -- -b /usr/local/bin
-          
-          # Use the binary directly to avoid "unknown flag" or "missing command" errors
-          /usr/local/bin/docker-scout cve ${{ env.IMG_SHA }} --format sarif --output scout-report.sarif
+        uses: docker/scout-action@v1
+        with:
+          # Bypassing the command input to avoid version/parsing errors
+          image: ${{ env.IMG_SHA }}
+          ignore-base: true
+          exit-code: true
+          sarif-file: scout-report.sarif
 
       - name: Upload Scan results
         if: always()
