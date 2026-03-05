@@ -37,6 +37,7 @@ jobs:
       pull-requests: write
 
     env:
+      # If REGISTRY_URL is provided, prepend it (with "/"); otherwise use empty prefix.
       IMG_SHA: ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:${{ github.sha }}
 
     steps:
@@ -69,17 +70,23 @@ jobs:
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Docker Scout Scan
+      - name: Docker Scout Scan (CVEs)
         uses: docker/scout-action@v1
         with:
-          # Bypassing the command input to avoid version/parsing errors
-          image: ${{ env.IMG_SHA }}
+          command: cves
+          # Force analysis to use the local image we just built & loaded.
+          image: local://${{ env.IMG_SHA }}
           ignore-base: true
+          # Uncomment the next line to gate on High/Critical only:
+          # only-severities: critical,high
           exit-code: true
           sarif-file: scout-report.sarif
+          summary: true
+          write-comment: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Scan results
-        if: always()
+        if: ${{ always() && github.event_name != 'pull_request_target' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: scout-report.sarif
