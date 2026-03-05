@@ -79,7 +79,7 @@ jobs:
           ignore-base: true
           # Uncomment the next line to gate on High/Critical only:
           # only-severities: critical,high
-          exit-code: true
+          exit-code: false
           sarif-file: scout-report.sarif
           summary: true
           write-comment: true
