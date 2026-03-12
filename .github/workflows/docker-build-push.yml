@@ -142,7 +142,7 @@ jobs:
         if: ${{ inputs.update_manifests && inputs.manifest_file != '' && inputs.manifest_image_regex != '' && success() }}
         run: |
           echo "Updating image in: ${{ inputs.manifest_file }}"
-          perl -0777 -pe "s/${{ inputs.manifest_image_regex }}.*/image: ${{ env.IMG_SHA }}/g" -i ${{ inputs.manifest_file }}
+          perl -0777 -pe "s|${{ inputs.manifest_image_regex }}.*|image: ${{ env.IMG_SHA }}|g" -i ${{ inputs.manifest_file }}${{ inputs.manifest_file }}
           echo "--- Updated Manifest ---"
           sed -n '1,200p' ${{ inputs.manifest_file }}
 
