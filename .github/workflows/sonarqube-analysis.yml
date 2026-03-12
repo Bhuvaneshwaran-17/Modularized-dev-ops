@@ -74,7 +74,7 @@ jobs:
       - name: Run Tests with Coverage (JaCoCo)
         # IMPORTANT: run tests from module’s working directory
         working-directory: ${{ inputs.workdir }}
-        run: mvn -B test jacoco:report -f "${{ inputs.pom_path }}"
+        run: mvn -B test jacoco:report -f "pom.xml"
 
       - name: SonarCloud Scan (with verbose output)
         env:
