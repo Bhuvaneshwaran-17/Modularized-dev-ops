@@ -117,4 +117,3 @@ jobs:
       status: "FAILURE"
     secrets:
       WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
-``
