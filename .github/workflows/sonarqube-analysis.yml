@@ -6,24 +6,19 @@ on:
       java_version:
         type: string
         default: "21"
-
       pom_path:
         type: string
         default: "pom.xml"
-
       workdir:
         description: "Directory to run analysis from (e.g., Auth/apps)"
         type: string
         default: "."
-
       sonar_project_key:
         required: true
         type: string
-
       run_quality_gate:
         type: boolean
         default: true
-
     secrets:
       SONAR_TOKEN:
         required: true
@@ -52,9 +47,7 @@ jobs:
           java-version: ${{ inputs.java_version }}
           cache: maven
 
-      ###############################################################
-      # DEBUG BLOCK — confirms what Sonar workflow is receiving
-      ###############################################################
+      # ---------- DEBUG ----------
       - name: DEBUG — Print inputs & env
         run: |
           echo "===== SONAR DEBUG ====="
@@ -73,16 +66,15 @@ jobs:
           sed -n '1,60p' "${{ inputs.workdir }}/pom.xml" || true
           echo "===================================================="
 
-      ###############################################################
-      # TEST STEP — run from module directory using -f pom.xml
-      ###############################################################
       - name: Run Tests with Coverage (JaCoCo)
         working-directory: ${{ inputs.workdir }}
-        run: mvn -B test jacoco:report -f pom.xml
+        run: |
+          set -euxo pipefail
+          pwd
+          ls -la
+          test -f pom.xml
+          mvn -B test jacoco:report -f pom.xml
 
-      ###############################################################
-      # SONAR SCAN STEP — CRITICAL FIX: use "-f pom.xml" NOT inputs.pom_path
-      ###############################################################
       - name: SonarCloud Scan (with verbose output)
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -90,20 +82,20 @@ jobs:
           SONAR_ORG_KEY: ${{ secrets.SONAR_ORG_KEY }}
         working-directory: ${{ inputs.workdir }}
         run: |
-          set -e
-          echo "Running sonar:sonar from: $(pwd)"
-          mvn -B -X sonar:sonar \
-            -f pom.xml \
+          set -euxo pipefail
+          pwd
+          ls -la
+          test -f pom.xml
+          mvn -version
+          mvn -B -X org.sonarsource.scanner.maven:sonar-maven-plugin:4.0.0.4121:sonar \
+            -Dsonar.projectBaseDir=. \
             -Dsonar.host.url="${SONAR_HOST_URL}" \
             -Dsonar.organization="${SONAR_ORG_KEY}" \
             -Dsonar.projectKey="${{ inputs.sonar_project_key }}" \
             -Dsonar.token="${SONAR_TOKEN}" \
-            -Dsonar.qualitygate.wait=${{ inputs.run_quality_gate }} \
-            -Dsonar.verbose=true
+            -Dsonar.verbose=true \
+            -Dsonar.qualitygate.wait=${{ inputs.run_quality_gate }}
 
-      ###############################################################
-      # ARTIFACT UPLOAD
-      ###############################################################
       - name: Upload Test & Coverage Reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -114,9 +106,6 @@ jobs:
             **/target/surefire-reports/**
           if-no-files-found: warn
 
-  ###############################################################
-  # FAILURE NOTIFIER
-  ###############################################################
   notify-failure:
     needs: sonar
     if: failure()
@@ -128,3 +117,4 @@ jobs:
       status: "FAILURE"
     secrets:
       WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+``
