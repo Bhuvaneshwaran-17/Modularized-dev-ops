@@ -7,45 +7,35 @@ on:
         description: "Component/service name (for logs & commit message)"
         required: true
         type: string
-
       image_name:
         description: "Repository name (no registry prefix). e.g., auth, tap, transitcard"
         required: true
         type: string
-
       push:
         description: "If true, push image to the registry"
         type: boolean
         default: false
-
       context:
         description: "Docker build context"
         type: string
         default: "."
-
       dockerfile:
         description: "Path to Dockerfile"
         type: string
         default: "Dockerfile"
-
       update_manifests:
         description: "If true, update Kubernetes manifest with new image tag and commit"
         type: boolean
         default: false
-
       manifest_file:
-        description: "Path to the k8s manifest to update (e.g., k8s/auth.yaml)"
+        description: "Path to the k8s manifest to update (e.g., auth.yaml)"
         type: string
         default: ""
-
       manifest_image_regex:
         description: >
           Perl-compatible regex (escaped) to match the start of your image line.
-          Example:
-            ^[[:space:]]*image:[[:space:]]*172\\.27\\.186\\.119:4510\\/auth:
         type: string
         default: ""
-
     secrets:
       REGISTRY_USERNAME:
         required: false
@@ -61,7 +51,6 @@ on:
 jobs:
   docker:
     runs-on: [self-hosted, linux, x64]
-
     permissions:
       contents: write
       security-events: write
@@ -141,19 +130,19 @@ jobs:
       - name: Update manifest image (GitOps)
         if: ${{ inputs.update_manifests && inputs.manifest_file != '' && inputs.manifest_image_regex != '' && success() }}
         run: |
-          echo "Updating image in: ${{ inputs.manifest_file }}"
-          perl -0777 -pe "s|${{ inputs.manifest_image_regex }}.*|image: ${{ env.IMG_SHA }}|g" -i ${{ inputs.manifest_file }}${{ inputs.manifest_file }}
+          echo "Updating image in: K8s/${{ inputs.manifest_file }}"
+          perl -0777 -pe "s|${{ inputs.manifest_image_regex }}.*|image: ${{ env.IMG_SHA }}|g" -i K8s/${{ inputs.manifest_file }}
           echo "--- Updated Manifest ---"
-          sed -n '1,200p' ${{ inputs.manifest_file }}
+          sed -n '1,200p' K8s/${{ inputs.manifest_file }}
 
       - name: Commit + Push (GitOps)
         if: ${{ inputs.update_manifests && inputs.manifest_file != '' && success() }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ${{ inputs.manifest_file }}
+          git add K8s/${{ inputs.manifest_file }}
           git commit -m "GitOps: ${{ inputs.project_name }} -> ${{ github.sha }}" || echo "No changes"
           git push
 
