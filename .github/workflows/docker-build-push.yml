@@ -24,7 +24,6 @@ on:
         type: string
         default: "Dockerfile"
 
-      # --- GitOps (optional) ---
       update_manifests:
         description: "If true, update Kubernetes manifest with new image tag and commit"
         type: boolean
@@ -49,7 +48,6 @@ on:
         description: "Registry host:port (e.g., 172.27.186.119:4510 or docker.io)"
         required: false
       TEAMS_WEBHOOK_URL:
-        description: "Teams webhook for notifications"
         required: true
       LOCAL_ECR_CA:
         description: "Base64 of your local bridge CA (optional; only needed if runner lacks trust)"
@@ -66,16 +64,14 @@ jobs:
 
     env:
       REGISTRY_URL: ${{ secrets.REGISTRY_URL || '' }}
-      # Compose <registry>/<image_name>:<sha>  OR <image_name>:<sha> if registry missing
       IMG_SHA: ${{ (secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '') }}${{ inputs.image_name }}:${{ github.sha }}
-      # Helper flag for local bridge
       IS_LOCAL_ECR: ${{ secrets.REGISTRY_URL == '172.27.186.119:4510' }}
 
     steps:
-      - name: Checkout caller repo
+      - name: Checkout Code (caller repo)
         uses: actions/checkout@v4
 
-      # IMPORTANT: do not use `secrets` in `if:`. Gate in-shell instead.
+      # Optional CA install for local bridge
       - name: Trust local ECR bridge CA (optional)
         env:
           IS_LOCAL_ECR: ${{ env.IS_LOCAL_ECR }}
@@ -83,13 +79,12 @@ jobs:
         run: |
           set -e
           if [ "${IS_LOCAL_ECR}" = "true" ] && [ -n "${LOCAL_ECR_CA}" ]; then
-            echo "Installing local ECR bridge CA..."
             sudo mkdir -p /etc/docker/certs.d/172.27.186.119:4510
             echo "${LOCAL_ECR_CA}" | base64 -d | sudo tee /etc/docker/certs.d/172.27.186.119:4510/ca.crt >/dev/null
             sudo systemctl restart docker
             echo "CA installed."
           else
-            echo "Skipping CA install (either not local ECR or no LOCAL_ECR_CA provided)."
+            echo "Skipping CA install."
           fi
 
       - name: Set up Docker Buildx
@@ -111,7 +106,7 @@ jobs:
       - name: Load image into Docker daemon
         run: docker load -i /tmp/image.tar
 
-      # Login only for authenticated registries. Skip for local bridge.
+      # Login only when NOT using your local bridge
       - name: Login to Container Registry (if needed)
         if: ${{ inputs.push && env.REGISTRY_URL != '' && env.REGISTRY_URL != '172.27.186.119:4510' }}
         uses: docker/login-action@v3
@@ -121,6 +116,7 @@ jobs:
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Docker Scout Scan (CVEs)
+        id: scout
         uses: docker/scout-action@v1
         with:
           command: cves
@@ -132,8 +128,9 @@ jobs:
           write-comment: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Scan results (SARIF)
-        if: ${{ always() && github.event_name != 'pull_request_target' }}
+      # Upload only if file exists (prevents path-not-found error)
+      - name: Upload Scan results (SARIF) if present
+        if: ${{ always() && !cancelled() && hashFiles('scout-report.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: scout-report.sarif
@@ -149,7 +146,6 @@ jobs:
         if: ${{ inputs.update_manifests && inputs.manifest_file != '' && inputs.manifest_image_regex != '' && success() }}
         run: |
           echo "Updating image in: ${{ inputs.manifest_file }}"
-          echo "Replacing lines matching: ${{ inputs.manifest_image_regex }}"
           perl -0777 -pe 's/${{ inputs.manifest_image_regex }}.*/image: ${{ env.IMG_SHA }}/g' -i ${{ inputs.manifest_file }}
           echo "Preview (first 200 lines):"
           sed -n '1,200p' ${{ inputs.manifest_file }}
