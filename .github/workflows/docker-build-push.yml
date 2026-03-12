@@ -28,7 +28,6 @@ on:
         type: string
         default: "Dockerfile"
 
-      # --- GitOps (optional) ---
       update_manifests:
         description: "If true, update Kubernetes manifest with new image tag and commit"
         type: boolean
@@ -41,71 +40,60 @@ on:
 
       manifest_image_regex:
         description: >
-          Perl-compatible regex (string) that matches the beginning of the image line you want to replace,
-          e.g. ^[[:space:]]*image:[[:space:]]*172\\.27\\.186\\.119:4510\\/auth:
-          (Note: escape '.' as '\\\\.' and '/' as '\\\\/' in YAML)
+          Perl-compatible regex (escaped) to match the start of your image line.
+          Example:
+            ^[[:space:]]*image:[[:space:]]*172\\.27\\.186\\.119:4510\\/auth:
         type: string
         default: ""
 
     secrets:
       REGISTRY_USERNAME:
-        description: "Username/token for authenticated registries (Docker Hub/GHCR). Not required for local bridge."
         required: false
       REGISTRY_PASSWORD:
-        description: "Password/token for authenticated registries"
         required: false
       REGISTRY_URL:
-        description: "Registry host:port (e.g., 172.27.186.119:4510 or docker.io)"
         required: false
       TEAMS_WEBHOOK_URL:
         required: true
       LOCAL_ECR_CA:
-        description: "Base64 of your local bridge CA (optional; only needed if runner lacks trust)"
         required: false
 
 jobs:
   docker:
-    # Your runner is on your machine; only it can reach your LAN bridge.
     runs-on: [self-hosted, linux, x64]
 
     permissions:
-      contents: write             # commit GitOps changes
-      security-events: write      # upload SARIF
-      pull-requests: write        # Docker Scout PR comment (if any)
+      contents: write
+      security-events: write
+      pull-requests: write
 
     env:
       REGISTRY_URL: ${{ secrets.REGISTRY_URL || '' }}
-      # Compose <registry>/<image_name>:<sha>  OR <image_name>:<sha> if registry missing
       IMG_SHA: ${{ (secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '') }}${{ inputs.image_name }}:${{ github.sha }}
       IS_LOCAL_ECR: ${{ secrets.REGISTRY_URL == '172.27.186.119:4510' }}
 
     steps:
-      - name: Checkout Code (caller repo)
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Optional: trust CA only if provided and when targeting your local bridge.
-      - name: Trust local ECR bridge CA (optional)
+      - name: Trust local ECR CA if provided
         env:
           IS_LOCAL_ECR: ${{ env.IS_LOCAL_ECR }}
           LOCAL_ECR_CA: ${{ secrets.LOCAL_ECR_CA }}
         run: |
-          set -e
           if [ "${IS_LOCAL_ECR}" = "true" ] && [ -n "${LOCAL_ECR_CA}" ]; then
-            echo "[CA] Installing local ECR bridge CA into Docker trust store..."
             sudo mkdir -p /etc/docker/certs.d/172.27.186.119:4510
             echo "${LOCAL_ECR_CA}" | base64 -d | sudo tee /etc/docker/certs.d/172.27.186.119:4510/ca.crt >/dev/null
             sudo systemctl restart docker || true
-            echo "[CA] Installed."
+            echo "[CA] Installed local CA."
           else
-            echo "[CA] Skipping CA install (not local ECR or no LOCAL_ECR_CA provided)."
+            echo "[CA] Skipped."
           fi
 
-      - name: Set up Docker Buildx
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
 
-      - name: Build image to tarball (local load)
+      - name: Build image to tar
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
@@ -116,11 +104,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Load image into Docker daemon
+      - name: Load image
         run: docker load -i /tmp/image.tar
 
-      # 🔐 Login only for authenticated registries (skip for your local bridge).
-      - name: Login to Container Registry (if needed)
+      - name: Login (only if NOT local bridge)
         if: ${{ inputs.push && env.REGISTRY_URL != '' && env.REGISTRY_URL != '172.27.186.119:4510' }}
         uses: docker/login-action@v3
         with:
@@ -128,55 +115,46 @@ jobs:
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Docker Scout Scan (CVEs)
+      - name: Docker Scout Scan
         id: scout
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: local://${{ env.IMG_SHA }}     # scan locally built image
+          image: local://${{ env.IMG_SHA }}
           ignore-base: true
-          exit-code: false                      # never fail the job due to CVEs
+          exit-code: false
           sarif-file: scout-report.sarif
           summary: true
           write-comment: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Upload SARIF only if generated (prevents "Path does not exist")
-      - name: Upload Scan results (SARIF) if present
+      - name: Upload SARIF if exists
         if: ${{ always() && !cancelled() && hashFiles('scout-report.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: scout-report.sarif
 
-      - name: Push image (to registry)
+      - name: Push image
         if: ${{ inputs.push && success() }}
-        run: |
-          echo "[Push] Pushing image: ${{ env.IMG_SHA }}"
-          docker push "${{ env.IMG_SHA }}"
+        run: docker push "${{ env.IMG_SHA }}"
 
-      # --- GitOps: Update manifest with new image tag & commit back to caller repo ---
-      - name: Update image in manifest (GitOps)
+      - name: Update manifest image (GitOps)
         if: ${{ inputs.update_manifests && inputs.manifest_file != '' && inputs.manifest_image_regex != '' && success() }}
         run: |
-          set -e
           echo "Updating image in: ${{ inputs.manifest_file }}"
-          echo "Regex: ${{ inputs.manifest_image_regex }}"
-          echo "New image: ${{ env.IMG_SHA }}"
-          # Use double quotes so ${{ ... }} expands, and ensure your regex escapes '.' as '\\.' and '/' as '\\/'
           perl -0777 -pe "s/${{ inputs.manifest_image_regex }}.*/image: ${{ env.IMG_SHA }}/g" -i ${{ inputs.manifest_file }}
-          echo "Updated manifest (first 200 lines):"
+          echo "--- Updated Manifest ---"
           sed -n '1,200p' ${{ inputs.manifest_file }}
 
-      - name: Commit & push manifest change (GitOps)
+      - name: Commit + Push (GitOps)
         if: ${{ inputs.update_manifests && inputs.manifest_file != '' && success() }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ${{ inputs.manifest_file }}
-          git commit -m "GitOps: ${{ inputs.project_name }} -> ${{ github.sha }}" || echo "No changes to commit"
+          git commit -m "GitOps: ${{ inputs.project_name }} -> ${{ github.sha }}" || echo "No changes"
           git push
 
   notify-success:
