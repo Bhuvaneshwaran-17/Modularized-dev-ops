@@ -1,55 +1,102 @@
-name: "Docker - Build (and optional Push)"
+name: "Docker - Build (and optional Push + GitOps)"
 
 on:
   workflow_call:
     inputs:
       project_name:
+        description: "Component/service name (for logs & commit message)"
         required: true
         type: string
+
       image_name:
+        description: "Repository name (no registry prefix). e.g., auth, tap, transitcard"
         required: true
         type: string
+
       push:
+        description: "If true, push image to the registry"
         type: boolean
         default: false
+
       context:
+        description: "Docker build context"
         type: string
         default: "."
+
       dockerfile:
+        description: "Path to Dockerfile"
         type: string
         default: "Dockerfile"
+
+      # --- GitOps (optional) ---
+      update_manifests:
+        description: "If true, update Kubernetes manifest with new image tag and commit"
+        type: boolean
+        default: false
+
+      manifest_file:
+        description: "Path to the k8s manifest to update (e.g., k8s/auth.yaml)"
+        type: string
+        default: ""
+
+      manifest_image_regex:
+        description: "Perl regex that matches the 'image:' line (prefix) to replace"
+        type: string
+        default: ""
+
     secrets:
       REGISTRY_USERNAME:
-        required: true
+        description: "Username for authenticated registries (Docker Hub/GHCR). Not required for local bridge."
+        required: false
       REGISTRY_PASSWORD:
-        required: true
+        description: "Password/token for authenticated registries"
+        required: false
       REGISTRY_URL:
+        description: "Registry host:port (e.g., 172.27.186.119:4510 or docker.io)"
         required: false
       TEAMS_WEBHOOK_URL:
+        description: "Teams webhook for notifications"
         required: true
+      LOCAL_ECR_CA:
+        description: "Base64 of your local bridge CA (optional; only needed if runner lacks trust)"
+        required: false
 
 jobs:
   docker:
-    runs-on: ubuntu-latest
+    # Ensure this runs on your local machine (the only place that can reach your LAN registry)
+    runs-on: [self-hosted, linux, x64]
+
     permissions:
-      contents: read
-      security-events: write
-      pull-requests: write
+      contents: write             # for committing manifest updates (GitOps)
+      security-events: write      # for Docker Scout SARIF upload
+      pull-requests: write        # for Docker Scout PR comments
 
     env:
-      # If REGISTRY_URL is provided, prepend it (with "/"); otherwise use empty prefix.
-      IMG_SHA: ${{ secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '' }}${{ inputs.image_name }}:${{ github.sha }}
+      REGISTRY_URL: ${{ secrets.REGISTRY_URL || '' }}
+      # Compose the final image tag:
+      # If REGISTRY_URL is present → <registry>/<image_name>:<sha> ; else <image_name>:<sha>
+      IMG_SHA: ${{ (secrets.REGISTRY_URL != '' && format('{0}/', secrets.REGISTRY_URL) || '') }}${{ inputs.image_name }}:${{ github.sha }}
+      # Helper to detect your local bridge
+      IS_LOCAL_ECR: ${{ secrets.REGISTRY_URL == '172.27.186.119:4510' }}
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Code (caller repo)
         uses: actions/checkout@v4
+
+      # Optional: install/trust CA if this job ever runs on a different box without trust configured.
+      - name: Trust local ECR bridge CA (optional)
+        if: ${{ env.IS_LOCAL_ECR == 'true' && secrets.LOCAL_ECR_CA != '' }}
+        run: |
+          sudo mkdir -p /etc/docker/certs.d/172.27.186.119:4510
+          echo "${{ secrets.LOCAL_ECR_CA }}" | base64 -d | sudo tee /etc/docker/certs.d/172.27.186.119:4510/ca.crt >/dev/null
+          sudo systemctl restart docker
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker-container
 
-      - name: Build image
+      - name: Build image (to local tar)
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
@@ -63,10 +110,13 @@ jobs:
       - name: Load image into Docker daemon
         run: docker load -i /tmp/image.tar
 
-      - name: Login to Container Registry
+      # Login only when pushing to an authenticated registry (Docker Hub/GHCR/etc).
+      # Skip for your local ECR bridge (open on LAN).
+      - name: Login to Container Registry (if needed)
+        if: ${{ inputs.push && env.REGISTRY_URL != '' && env.REGISTRY_URL != '172.27.186.119:4510' }}
         uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.REGISTRY_URL || 'docker.io' }}
+          registry: ${{ env.REGISTRY_URL }}
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
@@ -74,26 +124,46 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: cves
-          # Force analysis to use the local image we just built & loaded.
-          image: local://${{ env.IMG_SHA }}
+          image: local://${{ env.IMG_SHA }}          # scan the locally built image
           ignore-base: true
-          # Uncomment the next line to gate on High/Critical only:
-          # only-severities: critical,high
           exit-code: false
           sarif-file: scout-report.sarif
           summary: true
           write-comment: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Scan results
+      - name: Upload Scan results (SARIF)
         if: ${{ always() && github.event_name != 'pull_request_target' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: scout-report.sarif
 
-      - name: Push image
+      - name: Push image (to registry)
         if: ${{ inputs.push && success() }}
-        run: docker push ${{ env.IMG_SHA }}
+        run: |
+          echo "Pushing image: ${{ env.IMG_SHA }}"
+          docker push "${{ env.IMG_SHA }}"
+
+      # --- GitOps: Update manifest with new image tag & commit back to the caller repo ---
+      - name: Update image in manifest (GitOps)
+        if: ${{ inputs.update_manifests && inputs.manifest_file != '' && inputs.manifest_image_regex != '' && success() }}
+        run: |
+          echo "Updating image in: ${{ inputs.manifest_file }}"
+          echo "Replacing lines matching: ${{ inputs.manifest_image_regex }}"
+          perl -0777 -pe 's/${{ inputs.manifest_image_regex }}.*/image: ${{ env.IMG_SHA }}/g' -i ${{ inputs.manifest_file }}
+          echo "Preview (first 200 lines):"
+          sed -n '1,200p' ${{ inputs.manifest_file }}
+
+      - name: Commit & push manifest change (GitOps)
+        if: ${{ inputs.update_manifests && inputs.manifest_file != '' && success() }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ${{ inputs.manifest_file }}
+          git commit -m "GitOps: ${{ inputs.project_name }} -> ${{ github.sha }}" || echo "No changes to commit"
+          git push
 
   notify-success:
     needs: docker
