@@ -6,32 +6,39 @@ on:
       java_version:
         type: string
         default: "21"
+
+      # Path to the POM of the module (relative to repo root)
       pom_path:
         type: string
         default: "pom.xml"
+
+      # NEW: Directory to run the analysis from (module root)
       workdir:
         description: "Directory to run analysis from (e.g., Auth/apps)"
         type: string
-        default: "."            # caller should pass the service folder
+        default: "."
+
       sonar_project_key:
         required: true
         type: string
+
       run_quality_gate:
         type: boolean
         default: true
+
     secrets:
       SONAR_TOKEN:
         required: true
       SONAR_HOST_URL:
-        required: true          # SonarCloud: https://sonarcloud.io ; SonarQube: http(s)://host:9000
+        required: true
       SONAR_ORG_KEY:
-        required: false         # Required for SonarCloud; omit for SonarQube
+        required: true
       TEAMS_WEBHOOK_URL:
         required: true
 
 jobs:
   sonar:
-    name: Sonar Scan
+    name: SonarCloud Scan
     runs-on: ubuntu-latest
 
     steps:
@@ -47,42 +54,46 @@ jobs:
           java-version: ${{ inputs.java_version }}
           cache: maven
 
+      # ---------- DEBUG BLOCK ----------
+      - name: DEBUG — Print inputs & env
+        run: |
+          echo "===== SONAR DEBUG ====="
+          echo "SONAR_HOST_URL    = ${{ secrets.SONAR_HOST_URL }}"
+          echo "SONAR_ORG_KEY     = ${{ secrets.SONAR_ORG_KEY }}"
+          echo "SONAR_PROJECT_KEY = ${{ inputs.sonar_project_key }}"
+          echo "WORKDIR           = ${{ inputs.workdir }}"
+          echo "POM PATH          = ${{ inputs.pom_path }}"
+          echo "QUALITY GATE      = ${{ inputs.run_quality_gate }}"
+          echo "Repo root         = $(pwd)"
+          echo "List workdir:"
+          ls -la "${{ inputs.workdir }}" || true
+          echo "Show POM (first 60 lines):"
+          sed -n '1,60p' "${{ inputs.pom_path }}" || true
+          echo "========================"
+
       - name: Run Tests with Coverage (JaCoCo)
+        # IMPORTANT: run tests from module’s working directory
+        working-directory: ${{ inputs.workdir }}
         run: mvn -B test jacoco:report -f "${{ inputs.pom_path }}"
 
-      - name: Sonar Scan (with debug)
+      - name: SonarCloud Scan (with verbose output)
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
           SONAR_ORG_KEY: ${{ secrets.SONAR_ORG_KEY }}
+        # IMPORTANT: run sonar from module’s working directory
         working-directory: ${{ inputs.workdir }}
         run: |
           set -e
-          echo "=== Sonar debug ==="
-          echo "Project Key     : ${{ inputs.sonar_project_key }}"
-          echo "Host URL        : ${SONAR_HOST_URL}"
-          if [ -n "${SONAR_ORG_KEY}" ]; then
-            echo "Organization    : ${SONAR_ORG_KEY} (SonarCloud)"
-          else
-            echo "Organization    : (none) (SonarQube/self-hosted)"
-          fi
-          echo "Working dir     : $(pwd)"
-          echo "POM used        : ${{ inputs.pom_path }}"
-
-          ORG_ARG=""
-          if [ -n "${SONAR_ORG_KEY}" ]; then
-            ORG_ARG="-Dsonar.organization=${SONAR_ORG_KEY}"
-          fi
-
-          # -X for Maven debug; -Dsonar.verbose to print scanner internals
-          mvn -B -X \
-            org.sonarsource.scanner.maven:sonar-maven-plugin:4.0.0.4121:sonar \
+          echo "Running sonar:sonar from: $(pwd)"
+          mvn -B -X sonar:sonar \
             -f "${{ inputs.pom_path }}" \
             -Dsonar.host.url="${SONAR_HOST_URL}" \
+            -Dsonar.organization="${SONAR_ORG_KEY}" \
             -Dsonar.projectKey="${{ inputs.sonar_project_key }}" \
+            -Dsonar.token="${SONAR_TOKEN}" \
             -Dsonar.qualitygate.wait=${{ inputs.run_quality_gate }} \
-            -Dsonar.verbose=true \
-            ${ORG_ARG}
+            -Dsonar.verbose=true
 
       - name: Upload Test & Coverage Reports
         if: always()
