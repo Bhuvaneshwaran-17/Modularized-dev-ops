@@ -4,38 +4,30 @@ on:
   workflow_call:
     inputs:
       project_name:
-        description: "Component/service name (for logs & commit message)"
         required: true
         type: string
       image_name:
-        description: "Repository name (no registry prefix). e.g., auth, tap, transitcard"
         required: true
         type: string
       push:
-        description: "If true, push image to the registry"
         type: boolean
         default: false
       context:
-        description: "Docker build context"
         type: string
         default: "."
       dockerfile:
-        description: "Path to Dockerfile"
         type: string
         default: "Dockerfile"
       update_manifests:
-        description: "If true, update Kubernetes manifest with new image tag and commit"
         type: boolean
         default: false
       manifest_file:
-        description: "Path to the k8s manifest to update (e.g., auth.yaml)"
         type: string
         default: ""
       manifest_image_regex:
-        description: >
-          Perl-compatible regex (escaped) to match the start of your image line.
         type: string
         default: ""
+
     secrets:
       REGISTRY_USERNAME:
         required: false
@@ -65,7 +57,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Trust local ECR CA if provided
+      - name: Trust Local ECR CA (Optional)
         env:
           IS_LOCAL_ECR: ${{ env.IS_LOCAL_ECR }}
           LOCAL_ECR_CA: ${{ secrets.LOCAL_ECR_CA }}
@@ -74,29 +66,31 @@ jobs:
             sudo mkdir -p /etc/docker/certs.d/172.27.186.119:4510
             echo "${LOCAL_ECR_CA}" | base64 -d | sudo tee /etc/docker/certs.d/172.27.186.119:4510/ca.crt >/dev/null
             sudo systemctl restart docker || true
-            echo "[CA] Installed local CA."
-          else
-            echo "[CA] Skipped."
           fi
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build image to tar
+      # ---------------------
+      # Build (no push)
+      # ---------------------
+      - name: Build image locally (testing mode - no push)
+        if: ${{ !inputs.push }}
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
+          platforms: linux/amd64
+          load: true
           push: false
-          outputs: type=docker,dest=/tmp/image.tar
           tags: ${{ env.IMG_SHA }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Load image
-        run: docker load -i /tmp/image.tar
-
-      - name: Login (only if NOT local bridge)
+      # ---------------------
+      # Build + Push (when enabled)
+      # ---------------------
+      - name: Login to registry (non-local ECR)
         if: ${{ inputs.push && env.REGISTRY_URL != '' && env.REGISTRY_URL != '172.27.186.119:4510' }}
         uses: docker/login-action@v3
         with:
@@ -104,38 +98,49 @@ jobs:
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Docker Scout Scan
+      - name: Build & Push Image
+        if: ${{ inputs.push }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMG_SHA }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---------------------
+      # Security Scan (Non-blocking)
+      # ---------------------
+      - name: Docker Scout Scan (non-blocking)
         id: scout
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: local://${{ env.IMG_SHA }}
+          image: ${{ env.IMG_SHA }}
           ignore-base: true
-          exit-code: false
+          exit-code: false     # IMPORTANT: pipeline never fails during testing
           sarif-file: scout-report.sarif
           summary: true
           write-comment: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload SARIF if exists
-        if: ${{ always() && !cancelled() && hashFiles('scout-report.sarif') != '' }}
+      - name: Upload SARIF
+        if: ${{ always() && hashFiles('scout-report.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: scout-report.sarif
 
-      - name: Push image
-        if: ${{ inputs.push && success() }}
-        run: docker push "${{ env.IMG_SHA }}"
-
-      - name: Update manifest image (GitOps)
-        if: ${{ inputs.update_manifests && inputs.manifest_file != '' && inputs.manifest_image_regex != '' && success() }}
+      # ---------------------
+      # GitOps Update
+      # ---------------------
+      - name: Update manifest (GitOps)
+        if: ${{ inputs.update_manifests && inputs.manifest_file != '' && success() }}
         run: |
-          echo "Updating image in: K8s/${{ inputs.manifest_file }}"
           perl -0777 -pe "s|${{ inputs.manifest_image_regex }}.*|image: ${{ env.IMG_SHA }}|g" -i K8s/${{ inputs.manifest_file }}
-          echo "--- Updated Manifest ---"
-          sed -n '1,200p' K8s/${{ inputs.manifest_file }}
 
-      - name: Commit + Push (GitOps)
+      - name: Commit & Push GitOps Change
         if: ${{ inputs.update_manifests && inputs.manifest_file != '' && success() }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
