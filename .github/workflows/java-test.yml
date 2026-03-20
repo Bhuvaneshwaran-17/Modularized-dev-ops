@@ -31,7 +31,9 @@ jobs:
           cache: maven
 
       - name: Run Tests
-        run: ${{ inputs.test_command }} -f ${{ inputs.pom_path }} | tee maven_output.log
+        run: |
+          set -o pipefail
+          ${{ inputs.test_command }} -f ${{ inputs.pom_path }} | tee maven_output.log
 
       - name: Upload Test Reports
         if: always()
